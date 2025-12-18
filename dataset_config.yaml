@@ -1,0 +1,16 @@
+known_attacks:
+  - BENIGN
+  - Botnet
+  - DDoS
+  - DoS
+  - FTP-Patator
+  - Heartbleed
+  - Infiltration
+  - Portscan
+  - SSH-Patator
+  - Web Attack
+
+# 未知攻撃として扱いたいラベルを明示的に指定（任意）
+# 空の場合は、データセットに存在し known_attacks に含まれないラベルが未知として扱われます
+unknown_attacks: []
+

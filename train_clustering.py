@@ -15,6 +15,7 @@ from typing import Optional
 import pandas as pd
 import numpy as np
 import torch
+import yaml
 
 # libモジュールをインポート
 from lib.models.network import AdaptiveClustering
@@ -63,19 +64,35 @@ def setup_logging(log_dir: str = 'logs') -> str:
     return timestamp
 
 
+def load_config(config_path: Optional[str]) -> Optional[dict]:
+    if config_path is None:
+        return None
+    if not os.path.exists(config_path):
+        logging.warning(f"Config file not found: {config_path}. Using all labels.")
+        return None
+    with open(config_path, 'r') as f:
+        return yaml.safe_load(f)
+
+
 def save_model(model: AdaptiveClustering, categories: list,
                results_dir: str = 'results', timestamp: Optional[str] = None) -> tuple:
     """
     モデルとカテゴリ情報を保存
-    
+
+    注意:
+        categories には「可視化や評価に用いるカテゴリリスト」を渡す。
+        そのため、既知ラベルだけでなく全ラベル（評価用カテゴリ）を渡すことで、
+        visualize_adaptive_clustering.py 側でデータセット中の全ラベルを
+        正しくインデックス変換できるようにする。
+
     Args:
-        model: 訓練済みAdaptive Clusteringモデル
-        categories: カテゴリリスト
+        model: 訓練済み Adaptive Clustering モデル
+        categories: カテゴリリスト（評価に用いる全ラベル）
         results_dir: 結果保存ディレクトリ
-        timestamp: タイムスタンプ（Noneの場合は自動生成）
-        
+        timestamp: タイムスタンプ（None の場合は自動生成）
+
     Returns:
-        (モデルパス, カテゴリパス)のタプル
+        (モデルパス, カテゴリパス) のタプル
     """
     if timestamp is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -83,13 +100,14 @@ def save_model(model: AdaptiveClustering, categories: list,
     os.makedirs(results_dir, exist_ok=True)
     
     # Adaptive Clusteringモデルを保存
-    model_path = os.path.join(results_dir, f'clustering_model_{timestamp}.pkl')
+    # run_ids_cicids2017.py と同じ命名規則（trained_model_...）に合わせる
+    model_path = os.path.join(results_dir, f'trained_model_{timestamp}.pkl')
     with open(model_path, 'wb') as f:
         pickle.dump(model, f)
     logging.info(f"Model saved: {model_path}")
     
-    # カテゴリ情報を保存
-    categories_path = os.path.join(results_dir, f'clustering_model_{timestamp}.categories')
+    # カテゴリ情報を保存（こちらも run_ids_cicids2017.py に合わせる）
+    categories_path = os.path.join(results_dir, f'trained_model_{timestamp}.categories')
     with open(categories_path, 'w') as f:
         json.dump(categories, f)
     logging.info(f"Categories saved: {categories_path}")
@@ -296,6 +314,8 @@ def main():
     parser = argparse.ArgumentParser(description='Train Adaptive Clustering model only')
     parser.add_argument('--dataset_path', type=str, default='dataset/CICIDS2017_improved',
                         help='Dataset path (default: dataset/CICIDS2017_improved)')
+    parser.add_argument('--config', type=str, default='dataset_config.yaml',
+                        help='Path to dataset_config.yaml (known/unknown labels). If missing, all labels are used for training.')
     parser.add_argument('--results_dir', type=str, default='results',
                         help='Results directory (default: results/)')
     parser.add_argument('--logs_dir', type=str, default='logs',
@@ -343,31 +363,52 @@ def main():
         train_df, test_df = split_dataset(df, train_test_split=args.train_test_split, random_seed=args.random_seed)
         logging.info(f"Train samples: {len(train_df)}, Test samples: {len(test_df)}")
         
-        # 4. カテゴリの抽出
-        categories = sorted(list(set(train_df['Label'].values)))
-        logging.info(f"Categories: {categories}")
+        # 4. 既知/未知ラベルの決定（configがあれば適用）
+        cfg = load_config(args.config)
+        all_labels = set(df['Label'].unique().tolist())
+        if cfg:
+            known_labels = cfg.get('known_attacks', [])
+            unknown_labels_cfg = cfg.get('unknown_attacks', [])
+            known_set = set(known_labels) if known_labels else all_labels
+            if unknown_labels_cfg:
+                unknown_set = set(unknown_labels_cfg)
+            else:
+                unknown_set = all_labels - known_set
+            logging.info(f"Known labels (config): {sorted(list(known_set))}")
+            logging.info(f"Unknown labels (config or auto): {sorted(list(unknown_set))}")
+        else:
+            known_set = all_labels
+            unknown_set = set()
+            logging.info("Config not found or not provided. Using all labels as known.")
         
-        # 5. データ準備
+        # 既知データのみで学習
+        train_known_df = train_df[train_df['Label'].isin(known_set)].copy()
+        if train_known_df.empty:
+            raise ValueError("No training samples for known labels. Check config.")
+        
+        categories_known = sorted(list(known_set))
+        label_to_idx_known = {label: idx for idx, label in enumerate(categories_known)}
+        
+        # 評価用は全ラベルを整数マップ（未知も別ラベルとして扱う）
+        categories_eval = sorted(list(all_labels))
+        label_to_idx_eval = {label: idx for idx, label in enumerate(categories_eval)}
+        
+        # 5. データ準備（学習:既知のみ／評価:全て）
         logging.info("Preparing data for training...")
-        train_df_ = train_df.drop(['Label'], axis=1)
+        train_df_ = train_known_df.drop(['Label'], axis=1)
         X_train = torch.FloatTensor(train_df_.values)
+        y_train = torch.LongTensor(train_known_df['Label'].map(label_to_idx_known).values)
         
-        # ラベルのインデックス変換
-        label_to_idx = {label: idx for idx, label in enumerate(categories)}
-        y_train = train_df['Label'].map(label_to_idx).values
-        y_train = torch.LongTensor(y_train)
-        
-        # テストデータの準備
         test_df_ = test_df.drop(['Label'], axis=1)
         X_test = torch.FloatTensor(test_df_.values)
-        y_test = test_df['Label'].map(label_to_idx).values
+        y_test = np.array([label_to_idx_eval[lbl] for lbl in test_df['Label'].values])
         
         logging.info("Data preparation completed")
         
         # 6. Adaptive Clusteringモデルの訓練
         logging.info("Training Adaptive Clustering model...")
         model, epoch_losses, batch_losses = train_adaptive_clustering(
-            X_train, y_train, categories,
+            X_train, y_train, categories_known,
             lr=args.learning_rate,
             n_epochs=args.n_epochs,
             early_stop_threshold=args.early_stop_threshold,
@@ -381,13 +422,16 @@ def main():
         logging.info("Training losses saved")
         
         # 7. モデルの保存
+        #    モデル自体は既知ラベルで学習しているが、
+        #    可視化時にデータセット中の全ラベルを扱えるようにするため、
+        #    カテゴリ情報としては評価用の全ラベル（categories_eval）を保存する。
         logging.info("Saving model...")
-        save_model(model, categories, args.results_dir, timestamp)
+        save_model(model, categories_eval, args.results_dir, timestamp)
         logging.info("Model saved")
         
         # 8. クラスタリング評価
         logging.info("Evaluating clustering performance...")
-        metrics = evaluate_clustering(model, X_test, y_test, categories)
+        metrics = evaluate_clustering(model, X_test, y_test, categories_eval)
         
         # 結果の表示
         logging.info("=" * 50)
@@ -415,11 +459,11 @@ def main():
                 .astype(int)
                 .reshape(-1)
             )
-            predicted_clusters = np.clip(predicted_clusters, 0, len(categories) - 1)
+            predicted_clusters = np.clip(predicted_clusters, 0, len(categories_eval) - 1)
         
         # 10. 結果の保存
         logging.info("Saving clustering results...")
-        save_clustering_results(metrics, predicted_clusters, y_test, categories,
+        save_clustering_results(metrics, predicted_clusters, y_test, categories_eval,
                                args.results_dir, timestamp)
         logging.info("Results saved")
         

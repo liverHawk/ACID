@@ -312,11 +312,20 @@ def visualize_embeddings(model: AdaptiveClustering, test_data: torch.Tensor,
     
     with torch.no_grad():
         outputs = model(test_data_sampled)
-        predicted_clusters = outputs.max(dim=1).indices.cpu().numpy()
+        # numpy 配列（int 型）のクラスタ ID に変換し 1 次元化
+        predicted_clusters = (
+            outputs.max(dim=1)
+            .indices.cpu()
+            .numpy()
+            .astype(int)
+            .reshape(-1)
+        )
         
         # 各サンプルの埋め込み表現を取得
         for i, cluster_idx in enumerate(predicted_clusters):
-            embedding = model.sub_nets[cluster_idx].encoder(test_data_sampled[i:i+1])
+            # numpy スカラー → Python int に変換してインデックスに使用
+            cluster_idx_int = int(cluster_idx)
+            embedding = model.sub_nets[cluster_idx_int].encoder(test_data_sampled[i:i+1])
             embeddings_list.append(embedding.squeeze().cpu().numpy())
     
     embeddings = np.array(embeddings_list)
@@ -517,9 +526,60 @@ def visualize_clustering_scatter(model: AdaptiveClustering, test_data: torch.Ten
     with torch.no_grad():
         outputs = model(test_data_sampled)
         predicted_clusters = outputs.max(dim=1).indices.cpu().numpy()
+        # 2次元配列になっている場合に備えて1次元化
+        predicted_clusters = predicted_clusters.reshape(-1)
+
+        # #region agent log
+        try:
+            import json as _json
+            from datetime import datetime as _dt
+            log_path = "/Users/toshi_pro/Documents/school/ACID/.cursor/debug.log"
+            with open(log_path, "a") as _f:
+                _payload = {
+                    "sessionId": "debug-session",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H1",
+                    "location": "visualize_adaptive_clustering.py:predict",
+                    "message": "predicted_clusters shape and sample",
+                    "data": {
+                        "shape": getattr(predicted_clusters, "shape", None),
+                        "dtype": str(getattr(predicted_clusters, "dtype", "")),
+                        "first5": predicted_clusters[:5].tolist() if hasattr(predicted_clusters, "tolist") else None,
+                    },
+                    "timestamp": int(_dt.now().timestamp() * 1000),
+                }
+                _f.write(_json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion agent log
         
         # 各サンプルの埋め込み表現を取得
         for i, cluster_idx in enumerate(predicted_clusters):
+            # #region agent log
+            if i < 5:
+                try:
+                    import json as _json
+                    from datetime import datetime as _dt
+                    log_path = "/Users/toshi_pro/Documents/school/ACID/.cursor/debug.log"
+                    with open(log_path, "a") as _f:
+                        _payload = {
+                            "sessionId": "debug-session",
+                            "runId": "pre-fix",
+                            "hypothesisId": "H2",
+                            "location": "visualize_adaptive_clustering.py:loop",
+                            "message": "cluster index in loop",
+                            "data": {
+                                "i": int(i),
+                                "cluster_idx_repr": repr(cluster_idx),
+                                "cluster_idx_type": str(type(cluster_idx)),
+                            },
+                            "timestamp": int(_dt.now().timestamp() * 1000),
+                        }
+                        _f.write(_json.dumps(_payload) + "\n")
+                except Exception:
+                    pass
+            # #endregion agent log
+
             embedding = model.sub_nets[cluster_idx].encoder(test_data_sampled[i:i+1])
             embeddings_list.append(embedding.squeeze().cpu().numpy())
     
@@ -605,9 +665,67 @@ def visualize_clustering_scatter(model: AdaptiveClustering, test_data: torch.Ten
     # t-SNEで2次元に削減
     if use_tsne:
         logging.info("Computing t-SNE for scatter plot (this may take a while)...")
-        tsne = TSNE(n_components=2, random_state=42, perplexity=30)
-        embeddings_2d_tsne = tsne.fit_transform(embeddings)
-        centers_2d_tsne = tsne.fit_transform(cluster_centers) if cluster_centers.shape[1] == embeddings.shape[1] else None
+
+        # 埋め込み全体に対する t-SNE
+        n_samples_embed = embeddings.shape[0]
+        perplexity_embed = max(1, min(30, n_samples_embed - 1))
+        # #region agent log
+        try:
+            import json as _json
+            from datetime import datetime as _dt
+            log_path = "/Users/toshi_pro/Documents/school/ACID/.cursor/debug.log"
+            with open(log_path, "a") as _f:
+                _payload = {
+                    "sessionId": "debug-session",
+                    "runId": "pre-fix",
+                    "hypothesisId": "H3",
+                    "location": "visualize_adaptive_clustering.py:tsne_embeddings",
+                    "message": "t-SNE perplexity for embeddings",
+                    "data": {
+                        "n_samples_embed": int(n_samples_embed),
+                        "perplexity_embed": float(perplexity_embed),
+                    },
+                    "timestamp": int(_dt.now().timestamp() * 1000),
+                }
+                _f.write(_json.dumps(_payload) + "\n")
+        except Exception:
+            pass
+        # #endregion agent log
+
+        tsne_embed = TSNE(n_components=2, random_state=42, perplexity=perplexity_embed)
+        embeddings_2d_tsne = tsne_embed.fit_transform(embeddings)
+
+        # クラスタ中心に対する t-SNE（サンプル数が少ないので perplexity を調整）
+        centers_2d_tsne = None
+        if cluster_centers.shape[1] == embeddings.shape[1] and cluster_centers.shape[0] > 1:
+            n_samples_centers = cluster_centers.shape[0]
+            perplexity_centers = max(1, min(30, n_samples_centers - 1))
+
+            # #region agent log
+            try:
+                import json as _json
+                from datetime import datetime as _dt
+                log_path = "/Users/toshi_pro/Documents/school/ACID/.cursor/debug.log"
+                with open(log_path, "a") as _f:
+                    _payload = {
+                        "sessionId": "debug-session",
+                        "runId": "pre-fix",
+                        "hypothesisId": "H4",
+                        "location": "visualize_adaptive_clustering.py:tsne_centers",
+                        "message": "t-SNE perplexity for centers",
+                        "data": {
+                            "n_samples_centers": int(n_samples_centers),
+                            "perplexity_centers": float(perplexity_centers),
+                        },
+                        "timestamp": int(_dt.now().timestamp() * 1000),
+                    }
+                    _f.write(_json.dumps(_payload) + "\n")
+            except Exception:
+                pass
+            # #endregion agent log
+
+            tsne_centers = TSNE(n_components=2, random_state=42, perplexity=perplexity_centers)
+            centers_2d_tsne = tsne_centers.fit_transform(cluster_centers)
         
         # 予測クラスタで色分けした散布図
         fig, axes = plt.subplots(1, 2, figsize=(20, 8))
@@ -676,11 +794,18 @@ def main():
     
     # ログ設定
     timestamp = setup_logging(args.logs_dir)
+
+    # タイムスタンプごとの結果ディレクトリを作成
+    timestamp_dir = os.path.join(args.results_dir, timestamp)
+    os.makedirs(timestamp_dir, exist_ok=True)
+
     logging.info("=" * 50)
     logging.info("Starting Adaptive Clustering visualization")
     logging.info(f"Model path: {args.model_path}")
     logging.info(f"Categories path: {args.categories_path}")
     logging.info(f"Dataset path: {args.dataset_path}")
+    logging.info(f"Results base directory: {args.results_dir}")
+    logging.info(f"Timestamped results directory: {timestamp_dir}")
     logging.info("=" * 50)
     
     try:
@@ -713,21 +838,21 @@ def main():
         # 6. 可視化の実行
         logging.info("=" * 50)
         logging.info("Visualizing cluster centers...")
-        visualize_cluster_centers(model, categories, args.results_dir, timestamp,
+        visualize_cluster_centers(model, categories, timestamp_dir, timestamp,
                                  use_pca=not args.no_pca, use_tsne=not args.no_tsne)
         
         logging.info("Visualizing embeddings...")
         visualize_embeddings(model, test_data, test_labels, categories, 
-                           args.results_dir, timestamp, n_samples=args.n_samples,
+                           timestamp_dir, timestamp, n_samples=args.n_samples,
                            use_pca=not args.no_pca, use_tsne=not args.no_tsne)
         
         logging.info("Visualizing cluster assignments...")
         visualize_cluster_assignments(model, test_data, test_labels, categories,
-                                     args.results_dir, timestamp)
+                                     timestamp_dir, timestamp)
         
         logging.info("Visualizing clustering scatter plots...")
         visualize_clustering_scatter(model, test_data, test_labels, categories,
-                                    args.results_dir, timestamp, n_samples=args.n_samples,
+                                    timestamp_dir, timestamp, n_samples=args.n_samples,
                                     use_pca=not args.no_pca, use_tsne=not args.no_tsne)
         
         logging.info("=" * 50)

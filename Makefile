@@ -1,0 +1,93 @@
+PYTHON ?= uv run
+DATASET_PATH ?= dataset/CICIDS2017_improved
+RESULTS_DIR ?= results
+LOGS_DIR ?= logs
+CONFIG ?= dataset_config.yaml
+
+.PHONY: help init venv install train_ids train_cluster known_unknown eval visualize clean
+
+help:
+	@echo "Available targets:"
+	@echo "  init           - install dependencies via uv"
+	@echo "  train_ids      - train IDS (known-only) on CICIDS2017_improved"
+	@echo "  train_cluster  - train adaptive clustering model"
+	@echo "  known_unknown  - run known/unknown clustering experiment"
+	@echo "  eval           - evaluate a saved model (set MODEL_TS)"
+	@echo "  visualize      - visualize adaptive clustering (set VIS_TS)"
+	@echo "  clean          - remove cached artifacts (__pycache__, logs, results)"
+
+init:
+	uv sync
+
+venv: init
+	@echo "venv is managed by uv (see pyproject.toml)"
+
+install: init
+
+train_ids:
+	$(PYTHON) run_ids_cicids2017_known.py \
+		--config $(CONFIG) \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR) \
+		--logs_dir $(LOGS_DIR) \
+		--learning_rate 1e-4 \
+		--n_epochs 1 \
+		--early_stop_threshold 1.0
+
+train_cluster:
+	$(PYTHON) train_clustering.py \
+		--config $(CONFIG) \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR)/cluster \
+		--logs_dir $(LOGS_DIR) \
+		--train_test_split 0.7 \
+		--random_seed 42 \
+		--learning_rate 1e-4 \
+		--n_epochs 1
+
+known_unknown:
+	$(PYTHON) run_known_unknown_clustering.py \
+		--config $(CONFIG) \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR) \
+		--logs_dir $(LOGS_DIR) \
+		--train_test_split 0.7 \
+		--random_seed 42 \
+		--learning_rate 1e-4 \
+		--n_epochs 1 \
+		--early_stop_threshold 1.0
+
+# MODEL_TS: タイムスタンプ (例: 20251218_163559)
+# 例: make eval MODEL_TS=20251218_163559
+
+eval:
+	@if [ -z "$(MODEL_TS)" ]; then \
+		echo "ERROR: MODEL_TS is not set. Usage: make eval MODEL_TS=YYYYmmdd_HHMMSS"; \
+		exit 1; \
+	fi
+	$(PYTHON) evaluate_model.py \
+		--model_path $(RESULTS_DIR)/$(MODEL_TS)/trained_model_$(MODEL_TS).pkl \
+		--categories_path $(RESULTS_DIR)/$(MODEL_TS)/trained_model_$(MODEL_TS).categories \
+		--rf_model_path $(RESULTS_DIR)/$(MODEL_TS)/rf_model_$(MODEL_TS).pkl \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR)/evaluate \
+		--train_test_split 0.7 \
+		--random_seed 42
+
+# VIS_TS: タイムスタンプ (例: 20251218_212948)
+# 例: make visualize VIS_TS=20251218_212948
+
+visualize:
+	@if [ -z "$(VIS_TS)" ]; then \
+		echo "ERROR: VIS_TS is not set. Usage: make visualize VIS_TS=YYYYmmdd_HHMMSS"; \
+		exit 1; \
+	fi
+	$(PYTHON) visualize_adaptive_clustering.py \
+		--model_path $(RESULTS_DIR)/$(VIS_TS)/trained_model_$(VIS_TS).pkl \
+		--categories_path $(RESULTS_DIR)/$(VIS_TS)/trained_model_$(VIS_TS).categories \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR)/ev
+
+clean:
+	rm -rf __pycache__ */__pycache__ .pytest_cache
+	rm -rf $(LOGS_DIR)/* $(RESULTS_DIR)/*
