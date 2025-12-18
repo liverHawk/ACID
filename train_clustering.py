@@ -332,6 +332,9 @@ def main():
                         help='Train/test split ratio (default: 0.7)')
     parser.add_argument('--random_seed', type=int, default=42,
                         help='Random seed (default: 42)')
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'],
+                        help='Device to use: auto / cpu / cuda / mps (default: auto)')
     
     args = parser.parse_args()
     
@@ -345,6 +348,7 @@ def main():
     logging.info(f"Learning rate: {args.learning_rate}")
     logging.info(f"Number of epochs: {args.n_epochs}")
     logging.info(f"Early stop threshold: {args.early_stop_threshold}")
+    logging.info(f"Device preference: {args.device}")
     logging.info("=" * 50)
     
     try:
@@ -412,7 +416,8 @@ def main():
             lr=args.learning_rate,
             n_epochs=args.n_epochs,
             early_stop_threshold=args.early_stop_threshold,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            device_preference=args.device,
         )
         logging.info("Adaptive Clustering training completed")
         

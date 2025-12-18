@@ -3,6 +3,7 @@ DATASET_PATH ?= dataset/CICIDS2017_improved
 RESULTS_DIR ?= results
 LOGS_DIR ?= logs
 CONFIG ?= dataset_config.yaml
+DEVICE ?= auto
 
 .PHONY: help init venv install train_ids train_cluster known_unknown eval visualize clean
 
@@ -32,7 +33,8 @@ train_ids:
 		--logs_dir $(LOGS_DIR) \
 		--learning_rate 1e-4 \
 		--n_epochs 1 \
-		--early_stop_threshold 1.0
+		--early_stop_threshold 1.0 \
+		--device $(DEVICE)
 
 train_cluster:
 	$(PYTHON) train_clustering.py \
@@ -43,7 +45,8 @@ train_cluster:
 		--train_test_split 0.7 \
 		--random_seed 42 \
 		--learning_rate 1e-4 \
-		--n_epochs 1
+		--n_epochs 1 \
+		--device $(DEVICE)
 
 known_unknown:
 	$(PYTHON) run_known_unknown_clustering.py \
@@ -55,7 +58,8 @@ known_unknown:
 		--random_seed 42 \
 		--learning_rate 1e-4 \
 		--n_epochs 1 \
-		--early_stop_threshold 1.0
+		--early_stop_threshold 1.0 \
+		--device $(DEVICE)
 
 # MODEL_TS: タイムスタンプ (例: 20251218_163559)
 # 例: make eval MODEL_TS=20251218_163559

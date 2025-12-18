@@ -215,6 +215,9 @@ def main():
                         help='Number of epochs (default: 100)')
     parser.add_argument('--early_stop_threshold', type=float, default=1.0,
                         help='Early stop threshold (default: 1.0)')
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'],
+                        help='Device to use: auto / cpu / cuda / mps (default: auto)')
     
     args = parser.parse_args()
     
@@ -231,6 +234,7 @@ def main():
     logging.info(f"Results base directory: {args.results_dir}")
     logging.info(f"Timestamped results directory: {timestamp_dir}")
     logging.info(f"Logs directory: {args.logs_dir}")
+    logging.info(f"Device preference: {args.device}")
     logging.info("=" * 50)
     
     try:
@@ -274,7 +278,8 @@ def main():
             lr=args.learning_rate,
             n_epochs=args.n_epochs,
             early_stop_threshold=args.early_stop_threshold,
-            batch_size=args.batch_size
+            batch_size=args.batch_size,
+            device_preference=args.device,
         )
         logging.info("Adaptive Clustering training completed")
         

@@ -475,6 +475,13 @@ def main():
         help="Batch size (default: auto)",
     )
     parser.add_argument(
+        "--device",
+        type=str,
+        default="auto",
+        choices=["auto", "cpu", "cuda", "mps"],
+        help="Device to use: auto / cpu / cuda / mps (default: auto)",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Enable debug outputs (e.g., training loss files)",
@@ -491,6 +498,7 @@ def main():
         logging.info(f"Dataset path: {args.dataset_path}")
         logging.info(f"Results directory: {args.results_dir}")
         logging.info(f"Logs directory: {args.logs_dir}")
+        logging.info(f"Device preference: {args.device}")
         logging.info("=" * 50)
 
         # 1. 設定読み込み
@@ -560,6 +568,7 @@ def main():
             batch_size=args.batch_size,
             timestamp=timestamp,
             loss_log_dir=args.logs_dir,
+            device_preference=args.device,
         )
         logging.info("Adaptive Clustering training completed")
 

@@ -62,6 +62,7 @@ def train_adaptive_clustering(
     batch_size: Optional[int] = None,
     timestamp: Optional[str] = None,
     loss_log_dir: str = "logs",
+    device_preference: str = "auto",
 ) -> Tuple[AdaptiveClustering, List[dict], List[dict]]:
     """
     Adaptive Clusteringモデルを訓練
@@ -85,15 +86,37 @@ def train_adaptive_clustering(
     nan_log_path = os.path.join(loss_log_dir, f"nan_debug_{timestamp}.json")
 
     # デバイスを決定
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        default_batch_size = 2048
-    elif torch.backends.mps.is_available():
-        device = torch.device('mps')
+    pref = (device_preference or "auto").lower()
+    if pref == "cpu":
+        device = torch.device("cpu")
         default_batch_size = 1024
+    elif pref == "cuda":
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            default_batch_size = 2048
+        else:
+            logging.warning("CUDA is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+            default_batch_size = 1024
+    elif pref == "mps":
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+            default_batch_size = 1024
+        else:
+            logging.warning("MPS is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+            default_batch_size = 1024
     else:
-        device = torch.device('cpu')
-        default_batch_size = 1024
+        # auto: CUDA > MPS > CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+            default_batch_size = 2048
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+            default_batch_size = 1024
+        else:
+            device = torch.device("cpu")
+            default_batch_size = 1024
     
     if batch_size is None:
         batch_size = default_batch_size
