@@ -220,10 +220,16 @@ def main():
     
     # ログ設定
     timestamp = setup_logging(args.logs_dir)
+
+    # タイムスタンプごとの結果ディレクトリを作成
+    timestamp_dir = os.path.join(args.results_dir, timestamp)
+    os.makedirs(timestamp_dir, exist_ok=True)
+
     logging.info("=" * 50)
     logging.info("Starting IDS training and evaluation")
     logging.info(f"Dataset path: {args.dataset_path}")
-    logging.info(f"Results directory: {args.results_dir}")
+    logging.info(f"Results base directory: {args.results_dir}")
+    logging.info(f"Timestamped results directory: {timestamp_dir}")
     logging.info(f"Logs directory: {args.logs_dir}")
     logging.info("=" * 50)
     
@@ -272,9 +278,9 @@ def main():
         )
         logging.info("Adaptive Clustering training completed")
         
-        # 訓練lossを保存
+        # 訓練lossを保存（タイムスタンプディレクトリ配下）
         logging.info("Saving training losses...")
-        save_training_losses(epoch_losses, batch_losses, args.results_dir, timestamp)
+        save_training_losses(epoch_losses, batch_losses, timestamp_dir, timestamp)
         logging.info("Training losses saved")
         
         # 7. 拡張データセットの作成
@@ -318,9 +324,9 @@ def main():
         model.classifier = rf_model
         logging.info("Random Forest training completed")
         
-        # 10. モデルの保存
+        # 10. モデルの保存（タイムスタンプディレクトリ配下）
         logging.info("Saving models...")
-        save_model(model, categories, rf_model, args.results_dir, timestamp)
+        save_model(model, categories, rf_model, timestamp_dir, timestamp)
         logging.info("Models saved")
         
         # 11. 評価
@@ -346,10 +352,16 @@ def main():
         logging.info(f"False Alarm Rate: {metrics_data.get('FAR', 0):.4f}")
         logging.info("=" * 50)
         
-        # 12. 結果の保存
+        # 12. 結果の保存（タイムスタンプディレクトリ配下）
         logging.info("Saving results...")
-        save_results(confusion_matrix_normalized, confusion_matrix_counts, metrics_data, feature_importance, 
-                    args.results_dir, timestamp)
+        save_results(
+            confusion_matrix_normalized,
+            confusion_matrix_counts,
+            metrics_data,
+            feature_importance,
+            timestamp_dir,
+            timestamp,
+        )
         logging.info("Results saved")
         
         logging.info("=" * 50)
