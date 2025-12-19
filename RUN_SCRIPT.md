@@ -28,4 +28,4 @@ uv run run_known_unknown_clustering.py \
   --n_epochs 1 \
   --early_stop_threshold 1.0
 
-export FILE="results/20251218_212948/trained_model_20251218_212948" && uv run visualize_adaptive_clustering.py --model_path "$FILE".pkl --categories_path "$FILE".categories --dataset_path dataset/CICIDS2017_improved --results_dir results/ev
+export FILE="results/adaptive_clustering_model" && uv run visualize_adaptive_clustering.py --model_path "$FILE".pkl --categories_path "$FILE".categories --dataset_path dataset/CICIDS2017_improved --results_dir results/ev

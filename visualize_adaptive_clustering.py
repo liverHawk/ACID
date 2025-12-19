@@ -70,6 +70,9 @@ def load_trained_model(model_path: str, categories_path: str):
     """
     訓練済みモデルを読み込む
     
+    AdaptiveClusteringモデルだけ（RandomForestなし）でも読み込めるように対応。
+    RandomForestが含まれている場合は警告を出すが、クラスタリング評価には影響しない。
+    
     Args:
         model_path: Adaptive Clusteringモデルのパス
         categories_path: カテゴリ情報のパス
@@ -81,12 +84,57 @@ def load_trained_model(model_path: str, categories_path: str):
         model = pickle.load(f)
     logging.info(f"Model loaded: {model_path}")
     
+    # RandomForestが含まれているかチェック
+    if hasattr(model, 'classifier') and model.classifier is not None:
+        logging.warning("Model contains RandomForest classifier. "
+                       "This script will use only the AdaptiveClustering network for visualization.")
+    else:
+        logging.info("Model contains only AdaptiveClustering network (no RandomForest). "
+                   "This is suitable for clustering visualization.")
+    
     with open(categories_path, 'r') as f:
         categories = json.load(f)
     logging.info(f"Categories loaded: {categories_path}")
     logging.info(f"Categories: {categories}")
     
     return model, categories
+
+
+def get_device(device_preference: str = "auto") -> torch.device:
+    """
+    デバイスを決定
+    
+    Args:
+        device_preference: デバイス指定（auto/cpu/cuda/mps）
+        
+    Returns:
+        torch.device
+    """
+    pref = (device_preference or "auto").lower()
+    if pref == "cpu":
+        device = torch.device("cpu")
+    elif pref == "cuda":
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            logging.warning("CUDA is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+    elif pref == "mps":
+        if torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            logging.warning("MPS is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+    else:
+        # auto: CUDA > MPS > CPU
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        elif torch.backends.mps.is_available():
+            device = torch.device("mps")
+        else:
+            device = torch.device("cpu")
+    
+    return device
 
 
 def visualize_cluster_centers(model: AdaptiveClustering, categories: list,
@@ -269,9 +317,10 @@ def visualize_embeddings(model: AdaptiveClustering, test_data: torch.Tensor,
                          test_labels: np.ndarray, categories: list,
                          results_dir: str = 'results',
                          timestamp: Optional[str] = None,
-                         n_samples: int = 5000,
+                         n_samples: Optional[int] = None,
                          use_pca: bool = True,
-                         use_tsne: bool = True) -> None:
+                         use_tsne: bool = True,
+                         device: Optional[torch.device] = None) -> None:
     """
     埋め込み表現を可視化
     
@@ -282,17 +331,18 @@ def visualize_embeddings(model: AdaptiveClustering, test_data: torch.Tensor,
         categories: カテゴリリスト
         results_dir: 結果保存ディレクトリ
         timestamp: タイムスタンプ
-        n_samples: 可視化するサンプル数（多い場合はサンプリング）
+        n_samples: 可視化するサンプル数（Noneの場合は全データを使用）
         use_pca: PCAを使用するか
         use_tsne: t-SNEを使用するか
+        device: 使用するデバイス（Noneの場合はモデルから自動取得）
     """
     if timestamp is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     os.makedirs(results_dir, exist_ok=True)
     
-    # サンプリング（データが多い場合）
-    if len(test_data) > n_samples:
+    # サンプリング（n_samplesが指定されている場合のみ）
+    if n_samples is not None and len(test_data) > n_samples:
         indices = np.random.choice(len(test_data), n_samples, replace=False)
         test_data_sampled = test_data[indices]
         test_labels_sampled = test_labels[indices]
@@ -300,9 +350,15 @@ def visualize_embeddings(model: AdaptiveClustering, test_data: torch.Tensor,
     else:
         test_data_sampled = test_data
         test_labels_sampled = test_labels
+        if n_samples is None:
+            logging.info(f"Using all {len(test_data)} samples for visualization")
     
-    # デバイスを取得
-    device = next(model.parameters()).device
+    # デバイスを決定
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        # モデルを指定されたデバイスに移動
+        model = model.to(device)
     test_data_sampled = test_data_sampled.to(device)
     
     # 埋め込み表現を取得
@@ -405,7 +461,8 @@ def visualize_embeddings(model: AdaptiveClustering, test_data: torch.Tensor,
 def visualize_cluster_assignments(model: AdaptiveClustering, test_data: torch.Tensor,
                                   test_labels: np.ndarray, categories: list,
                                   results_dir: str = 'results',
-                                  timestamp: Optional[str] = None) -> None:
+                                  timestamp: Optional[str] = None,
+                                  device: Optional[torch.device] = None) -> None:
     """
     クラスタ割り当てを可視化
     
@@ -416,14 +473,19 @@ def visualize_cluster_assignments(model: AdaptiveClustering, test_data: torch.Te
         categories: カテゴリリスト
         results_dir: 結果保存ディレクトリ
         timestamp: タイムスタンプ
+        device: 使用するデバイス（Noneの場合はモデルから自動取得）
     """
     if timestamp is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     os.makedirs(results_dir, exist_ok=True)
     
-    # デバイスを取得
-    device = next(model.parameters()).device
+    # デバイスを決定
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        # モデルを指定されたデバイスに移動
+        model = model.to(device)
     test_data = test_data.to(device)
     
     # クラスタ割り当てを取得
@@ -482,9 +544,10 @@ def visualize_clustering_scatter(model: AdaptiveClustering, test_data: torch.Ten
                                  test_labels: np.ndarray, categories: list,
                                  results_dir: str = 'results',
                                  timestamp: Optional[str] = None,
-                                 n_samples: int = 5000,
+                                 n_samples: Optional[int] = None,
                                  use_pca: bool = True,
-                                 use_tsne: bool = True) -> None:
+                                 use_tsne: bool = True,
+                                 device: Optional[torch.device] = None) -> None:
     """
     クラスタリング後の散布図を可視化
     
@@ -495,17 +558,18 @@ def visualize_clustering_scatter(model: AdaptiveClustering, test_data: torch.Ten
         categories: カテゴリリスト
         results_dir: 結果保存ディレクトリ
         timestamp: タイムスタンプ
-        n_samples: 可視化するサンプル数（多い場合はサンプリング）
+        n_samples: 可視化するサンプル数（Noneの場合は全データを使用）
         use_pca: PCAを使用するか
         use_tsne: t-SNEを使用するか
+        device: 使用するデバイス（Noneの場合はモデルから自動取得）
     """
     if timestamp is None:
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     
     os.makedirs(results_dir, exist_ok=True)
     
-    # サンプリング（データが多い場合）
-    if len(test_data) > n_samples:
+    # サンプリング（n_samplesが指定されている場合のみ）
+    if n_samples is not None and len(test_data) > n_samples:
         indices = np.random.choice(len(test_data), n_samples, replace=False)
         test_data_sampled = test_data[indices]
         test_labels_sampled = test_labels[indices]
@@ -513,9 +577,15 @@ def visualize_clustering_scatter(model: AdaptiveClustering, test_data: torch.Ten
     else:
         test_data_sampled = test_data
         test_labels_sampled = test_labels
+        if n_samples is None:
+            logging.info(f"Using all {len(test_data)} samples for visualization")
     
-    # デバイスを取得
-    device = next(model.parameters()).device
+    # デバイスを決定
+    if device is None:
+        device = next(model.parameters()).device
+    else:
+        # モデルを指定されたデバイスに移動
+        model = model.to(device)
     test_data_sampled = test_data_sampled.to(device)
     
     # クラスタリング結果を取得
@@ -783,12 +853,15 @@ def main():
                         help='Train/test split ratio (default: 0.7)')
     parser.add_argument('--random_seed', type=int, default=42,
                         help='Random seed (default: 42)')
-    parser.add_argument('--n_samples', type=int, default=5000,
-                        help='Number of samples for embedding visualization (default: 5000)')
+    parser.add_argument('--n_samples', type=int, default=None,
+                        help='Number of samples for embedding visualization (default: None, use all data)')
     parser.add_argument('--no_pca', action='store_true',
                         help='Disable PCA visualization')
     parser.add_argument('--no_tsne', action='store_true',
                         help='Disable t-SNE visualization')
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'],
+                        help='Device to use: auto / cpu / cuda / mps (default: auto)')
     
     args = parser.parse_args()
     
@@ -799,6 +872,10 @@ def main():
     timestamp_dir = os.path.join(args.results_dir, timestamp)
     os.makedirs(timestamp_dir, exist_ok=True)
 
+    # デバイスを決定
+    device = get_device(args.device)
+    logging.info(f"Using device: {device}")
+    
     logging.info("=" * 50)
     logging.info("Starting Adaptive Clustering visualization")
     logging.info(f"Model path: {args.model_path}")
@@ -806,13 +883,16 @@ def main():
     logging.info(f"Dataset path: {args.dataset_path}")
     logging.info(f"Results base directory: {args.results_dir}")
     logging.info(f"Timestamped results directory: {timestamp_dir}")
+    logging.info(f"Device: {device}")
     logging.info("=" * 50)
     
     try:
         # 1. 訓練済みモデルの読み込み
         logging.info("Loading trained model...")
         model, categories = load_trained_model(args.model_path, args.categories_path)
-        logging.info("Model loaded successfully")
+        # モデルを指定されたデバイスに移動
+        model = model.to(device)
+        logging.info("Model loaded successfully and moved to device")
         
         # 2. データ読み込み
         logging.info("Loading dataset...")
@@ -844,16 +924,18 @@ def main():
         logging.info("Visualizing embeddings...")
         visualize_embeddings(model, test_data, test_labels, categories, 
                            timestamp_dir, timestamp, n_samples=args.n_samples,
-                           use_pca=not args.no_pca, use_tsne=not args.no_tsne)
+                           use_pca=not args.no_pca, use_tsne=not args.no_tsne,
+                           device=device)
         
         logging.info("Visualizing cluster assignments...")
         visualize_cluster_assignments(model, test_data, test_labels, categories,
-                                     timestamp_dir, timestamp)
+                                     timestamp_dir, timestamp, device=device)
         
         logging.info("Visualizing clustering scatter plots...")
         visualize_clustering_scatter(model, test_data, test_labels, categories,
                                     timestamp_dir, timestamp, n_samples=args.n_samples,
-                                    use_pca=not args.no_pca, use_tsne=not args.no_tsne)
+                                    use_pca=not args.no_pca, use_tsne=not args.no_tsne,
+                                    device=device)
         
         logging.info("=" * 50)
         logging.info("Visualization completed successfully")

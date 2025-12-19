@@ -4,6 +4,7 @@ RESULTS_DIR ?= results
 LOGS_DIR ?= logs
 CONFIG ?= dataset_config.yaml
 DEVICE ?= auto
+EPOCHS ?= 1
 
 .PHONY: help init venv install train_ids train_cluster known_unknown eval visualize clean
 
@@ -32,7 +33,7 @@ train_ids:
 		--results_dir $(RESULTS_DIR) \
 		--logs_dir $(LOGS_DIR) \
 		--learning_rate 1e-4 \
-		--n_epochs 1 \
+		--n_epochs $(EPOCHS) \
 		--early_stop_threshold 1.0 \
 		--device $(DEVICE)
 
@@ -45,7 +46,7 @@ train_cluster:
 		--train_test_split 0.7 \
 		--random_seed 42 \
 		--learning_rate 1e-4 \
-		--n_epochs 1 \
+		--n_epochs $(EPOCHS) \
 		--device $(DEVICE)
 
 known_unknown:
@@ -57,7 +58,7 @@ known_unknown:
 		--train_test_split 0.7 \
 		--random_seed 42 \
 		--learning_rate 1e-4 \
-		--n_epochs 1 \
+		--n_epochs $(EPOCHS) \
 		--early_stop_threshold 1.0 \
 		--device $(DEVICE)
 
@@ -90,7 +91,9 @@ visualize:
 		--model_path $(RESULTS_DIR)/$(VIS_TS)/trained_model_$(VIS_TS).pkl \
 		--categories_path $(RESULTS_DIR)/$(VIS_TS)/trained_model_$(VIS_TS).categories \
 		--dataset_path $(DATASET_PATH) \
-		--results_dir $(RESULTS_DIR)/ev
+		--results_dir $(RESULTS_DIR) \
+		--logs_dir $(LOGS_DIR) \
+		--device $(DEVICE)
 
 clean:
 	rm -rf __pycache__ */__pycache__ .pytest_cache
