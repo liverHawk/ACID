@@ -6,17 +6,19 @@ CONFIG ?= dataset_config.yaml
 DEVICE ?= auto
 EPOCHS ?= 1
 
-.PHONY: help init venv install train_ids train_cluster known_unknown eval visualize clean
+.PHONY: help init venv install train_ids train_ids_cicids2017 train_cluster known_unknown eval eval_cluster visualize clean
 
 help:
 	@echo "Available targets:"
-	@echo "  init           - install dependencies via uv"
-	@echo "  train_ids      - train IDS (known-only) on CICIDS2017_improved"
-	@echo "  train_cluster  - train adaptive clustering model"
-	@echo "  known_unknown  - run known/unknown clustering experiment"
-	@echo "  eval           - evaluate a saved model (set MODEL_TS)"
-	@echo "  visualize      - visualize adaptive clustering (set VIS_TS)"
-	@echo "  clean          - remove cached artifacts (__pycache__, logs, results)"
+	@echo "  init                - install dependencies via uv"
+	@echo "  train_ids           - train IDS (known-only) on CICIDS2017_improved"
+	@echo "  train_ids_cicids2017 - train IDS using IDS_cicids2017.py (original script)"
+	@echo "  train_cluster       - train adaptive clustering model"
+	@echo "  known_unknown       - run known/unknown clustering experiment"
+	@echo "  eval                - evaluate a saved model (set MODEL_TS)"
+	@echo "  eval_cluster        - evaluate clustering model (set MODEL_PATH and CATEGORIES_PATH)"
+	@echo "  visualize           - visualize adaptive clustering (set VIS_TS)"
+	@echo "  clean               - remove cached artifacts (__pycache__, logs, results)"
 
 init:
 	uv sync
@@ -32,6 +34,15 @@ train_ids:
 		--dataset_path $(DATASET_PATH) \
 		--results_dir $(RESULTS_DIR) \
 		--logs_dir $(LOGS_DIR) \
+		--learning_rate 1e-4 \
+		--n_epochs $(EPOCHS) \
+		--early_stop_threshold 1.0 \
+		--device $(DEVICE)
+
+train_ids_cicids2017:
+	$(PYTHON) IDS_cicids2017.py \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR) \
 		--learning_rate 1e-4 \
 		--n_epochs $(EPOCHS) \
 		--early_stop_threshold 1.0 \
@@ -78,6 +89,29 @@ eval:
 		--results_dir $(RESULTS_DIR)/evaluate \
 		--train_test_split 0.7 \
 		--random_seed 42
+
+# MODEL_PATH: モデルファイルのパス (例: results/adaptive_clustering_model.pkl)
+# CATEGORIES_PATH: カテゴリファイルのパス (例: results/adaptive_clustering_model.pkl.categories)
+# 例: make eval_cluster MODEL_PATH=results/adaptive_clustering_model.pkl CATEGORIES_PATH=results/adaptive_clustering_model.pkl.categories
+
+eval_cluster:
+	@if [ -z "$(MODEL_PATH)" ]; then \
+		echo "ERROR: MODEL_PATH is not set. Usage: make eval_cluster MODEL_PATH=path/to/model.pkl CATEGORIES_PATH=path/to/categories"; \
+		exit 1; \
+	fi
+	@if [ -z "$(CATEGORIES_PATH)" ]; then \
+		echo "ERROR: CATEGORIES_PATH is not set. Usage: make eval_cluster MODEL_PATH=path/to/model.pkl CATEGORIES_PATH=path/to/categories"; \
+		exit 1; \
+	fi
+	$(PYTHON) evaluate_clustering_model.py \
+		--model_path $(MODEL_PATH) \
+		--categories_path $(CATEGORIES_PATH) \
+		--dataset_path $(DATASET_PATH) \
+		--results_dir $(RESULTS_DIR) \
+		--logs_dir $(LOGS_DIR) \
+		--train_test_split 0.7 \
+		--random_seed 42 \
+		--device $(DEVICE)
 
 # VIS_TS: タイムスタンプ (例: 20251218_212948)
 # 例: make visualize VIS_TS=20251218_212948

@@ -24,7 +24,8 @@ __version__ = "1.0.2"
 
 import os
 import sys
-
+import argparse
+from datetime import datetime
 from lib.models.network import AdaptiveClustering
 from lib.utils.misc import extend_dataset
 from lib.utils import Dataset
@@ -45,13 +46,6 @@ from lib.models.RandomForest import RandomForest
 from sklearn.metrics import confusion_matrix, precision_recall_fscore_support as prf, accuracy_score
 
 from pprint import pprint
-
-if torch.cuda.is_available():
-    device = torch.device("cuda")
-elif torch.backends.mps.is_available():
-    device = torch.device("mps")
-else:
-    device = torch.device("cpu")
 
 
 # ## Helpers
@@ -118,36 +112,85 @@ class metrics(object):
 # In[ ]:
 
 
-def train(X, y, lr=1e-4):
+def train(X, y, categories, lr=1e-4, n_epoch=100, batch_size=None, device_preference='auto',
+          encoder_dims=None, kernel_size=10, early_stop_threshold=1.0):
+    """
+    訓練関数
+    
+    Args:
+        X: 訓練データ
+        y: 訓練ラベル
+        categories: カテゴリリスト
+        lr: 学習率
+        n_epoch: エポック数
+        batch_size: バッチサイズ（Noneの場合は自動決定）
+        device_preference: デバイス指定（auto/cpu/cuda/mps）
+        encoder_dims: エンコーダーの次元リスト（Noneの場合は[500, 200, 50]）
+        kernel_size: カーネルサイズ
+        early_stop_threshold: 早期停止の閾値
+    """
     # デバイスを決定
-    use_cuda = torch.cuda.is_available()
-    use_mps = torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False
-
-    # バッチサイズを最適化（デバイスに応じて調整、メモリが許す限り大きく）
-    if use_cuda:
-        batch_size = 8192  # GPU用（さらに増加）
-    elif use_mps:
-        batch_size = 4096  # Apple Silicon用（増加）
+    pref = (device_preference or "auto").lower()
+    if pref == "cpu":
+        use_cuda = False
+        use_mps = False
+        device = torch.device("cpu")
+        default_batch_size = 4096
+    elif pref == "cuda":
+        use_cuda = torch.cuda.is_available()
+        use_mps = False
+        if use_cuda:
+            device = torch.device("cuda")
+            default_batch_size = 8192
+        else:
+            print("Warning: CUDA is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+            default_batch_size = 4096
+    elif pref == "mps":
+        use_cuda = False
+        use_mps = torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False
+        if use_mps:
+            device = torch.device("mps")
+            default_batch_size = 4096
+        else:
+            print("Warning: MPS is not available. Falling back to CPU.")
+            device = torch.device("cpu")
+            default_batch_size = 4096
     else:
-        batch_size = 4096  # CPU用（増加）
+        # auto: CUDA > MPS > CPU
+        use_cuda = torch.cuda.is_available()
+        use_mps = torch.backends.mps.is_available() if hasattr(torch.backends, 'mps') else False
+        if use_cuda:
+            device = torch.device("cuda")
+            default_batch_size = 8192
+        elif use_mps:
+            device = torch.device("mps")
+            default_batch_size = 4096
+        else:
+            device = torch.device("cpu")
+            default_batch_size = 4096
+
+    # バッチサイズを決定
+    if batch_size is None:
+        batch_size = default_batch_size
+
+    # エンコーダーの次元を決定
+    if encoder_dims is None:
+        encoder_dims = [500, 200, 50]
 
     # lib版のAdaptiveClusteringモデルを使用
-    model_ = AdaptiveClustering(encoder_dims=[500, 200, 50], n_kernels=len(categories), kernel_size=10)
+    model_ = AdaptiveClustering(encoder_dims=encoder_dims, n_kernels=len(categories), kernel_size=kernel_size)
     model_.train()
 
     # モデルをデバイスに移動
-    if use_cuda:
-        model_ = model_.cuda()
+    model_ = model_.to(device)
+    
+    if device.type == 'cuda':
         pin_memory = True
-        # GPU使用時でもnum_workersを2に設定（データローディングの並列化）
         num_workers = 2
-    elif use_mps:
-        model_ = model_.to('mps')
-        pin_memory = False
-        num_workers = 4  # Apple Siliconではマルチプロセッシングが有効
     else:
         pin_memory = False
-        num_workers = 4  # CPU使用時はマルチプロセッシングを増やす
+        num_workers = 4
 
     # Xとyをnumpy配列に変換してからTensor化（メモリ効率向上）
     if isinstance(X, torch.Tensor):
@@ -169,7 +212,6 @@ def train(X, y, lr=1e-4):
                    drop_last=False,
                    generator=torch.Generator().manual_seed(42) if num_workers > 0 else None)  # 再現性確保
 
-    n_epoch = 100
     # Adam optimizerを最適化
     optimizer = torch.optim.Adam(model_.parameters(), lr=lr, betas=(0.9, 0.999), eps=1e-8, weight_decay=0)
 
@@ -194,12 +236,8 @@ def train(X, y, lr=1e-4):
                 labels_ = torch.LongTensor(labels_)
             
             # デバイスに移動（非同期転送で高速化）
-            if use_cuda:
-                x = x.cuda(non_blocking=True)
-                labels_ = labels_.cuda(non_blocking=True)
-            elif use_mps:
-                x = x.to('mps')
-                labels_ = labels_.to('mps')
+            x = x.to(device, non_blocking=(device.type == 'cuda'))
+            labels_ = labels_.to(device, non_blocking=(device.type == 'cuda'))
 
             optimizer.zero_grad()
             _ = model_(x, labels_)
@@ -233,7 +271,7 @@ def train(X, y, lr=1e-4):
             avg_loss = float(loss.item())
         
         print(f"Iteration {i+1} | Loss {avg_loss:.6f} | Steps: {step_count}")
-        if avg_loss < 1:
+        if avg_loss < early_stop_threshold:
             print(f"Early stop triggered at: Iteration {i}")
             break
         pbar.close()
@@ -278,101 +316,150 @@ separator = "-"*50
 # In[15]:
 
 
-print(separator)
-print("Loading dataset...")
-# CICIDS2017_improvedデータセットを読み込み
-df = load_cicids2017_dataset(dataset_path)
-print(f"Dataset loaded: {len(df)} samples")
+def main():
+    """メイン実行関数"""
+    parser = argparse.ArgumentParser(
+        description='Train Adaptive Clustering model for IDS on CICIDS2017_improved'
+    )
+    parser.add_argument('--dataset_path', type=str, default='dataset/CICIDS2017_improved',
+                        help='Dataset path (default: dataset/CICIDS2017_improved)')
+    parser.add_argument('--results_dir', type=str, default='results',
+                        help='Results directory (default: results/)')
+    parser.add_argument('--extended_dataset_path', type=str, default='dataset/extended',
+                        help='Extended dataset path (default: dataset/extended)')
+    parser.add_argument('--learning_rate', type=float, default=1e-4,
+                        help='Learning rate (default: 1e-4)')
+    parser.add_argument('--n_epochs', type=int, default=100,
+                        help='Number of epochs (default: 100)')
+    parser.add_argument('--batch_size', type=int, default=None,
+                        help='Batch size (default: auto)')
+    parser.add_argument('--device', type=str, default='auto',
+                        choices=['auto', 'cpu', 'cuda', 'mps'],
+                        help='Device to use: auto / cpu / cuda / mps (default: auto)')
+    parser.add_argument('--early_stop_threshold', type=float, default=1.0,
+                        help='Early stop threshold (default: 1.0)')
+    parser.add_argument('--encoder_dims', type=int, nargs='+', default=None,
+                        help='Encoder dimensions (default: [500, 200, 50])')
+    parser.add_argument('--kernel_size', type=int, default=10,
+                        help='Kernel size (default: 10)')
+    parser.add_argument('--train_test_split', type=float, default=0.7,
+                        help='Train/test split ratio (default: 0.7)')
+    parser.add_argument('--random_seed', type=int, default=42,
+                        help='Random seed (default: 42)')
+    
+    args = parser.parse_args()
+    
+    # パスを設定
+    dataset_path = args.dataset_path
+    results_path = args.results_dir + '/' if not args.results_dir.endswith('/') else args.results_dir
+    extended_dataset_path = args.extended_dataset_path
+    
+    if not os.path.exists(results_path):
+        os.makedirs(results_path)
+    
+    separator = "-"*50
+    
+    print(separator)
+    print("Loading dataset...")
+    # CICIDS2017_improvedデータセットを読み込み
+    df = load_cicids2017_dataset(dataset_path)
+    print(f"Dataset loaded: {len(df)} samples")
+    
+    # 前処理を実行
+    print("Preprocessing dataset...")
+    df = preprocess_cicids2017(df)
+    print("Preprocessing completed")
+    
+    # データ分割
+    print("Splitting dataset...")
+    train_df, test_df = split_dataset(df, train_test_split=args.train_test_split, random_seed=args.random_seed)
+    print(f"Train samples: {len(train_df)}, Test samples: {len(test_df)}")
+    print("Done loading dataset")
+    
+    # カテゴリを取得
+    categories = sorted(list(set(train_df['Label'].values)))
+    print(f"Categories: {categories}")
+    
+    train_df_ = train_df.drop(['Label'], axis=1)
+    
+    # numpy配列として保持（Tensor変換はDataset内で行う）
+    X = train_df_.values.astype(np.float32)
+    
+    # ラベルのインデックス変換をベクトル化（高速化）
+    label_to_idx = {label: idx for idx, label in enumerate(categories)}
+    y = train_df['Label'].map(label_to_idx).values.astype(np.int64)
+    
+    cats = df['Label'].copy()
+    y_ = df['Label'].values
+    df.drop(['Label'], axis=1, inplace=True)
+    
+    # 訓練パラメータを表示
+    print(separator)
+    print("Training Parameters:")
+    print(f"  Learning rate: {args.learning_rate}")
+    print(f"  Number of epochs: {args.n_epochs}")
+    print(f"  Batch size: {args.batch_size if args.batch_size else 'auto'}")
+    print(f"  Device: {args.device}")
+    print(f"  Early stop threshold: {args.early_stop_threshold}")
+    print(f"  Encoder dims: {args.encoder_dims if args.encoder_dims else [500, 200, 50]}")
+    print(f"  Kernel size: {args.kernel_size}")
+    print(separator)
+    
+    # モデルを訓練
+    print("Training model...")
+    model = train(X, y, categories, 
+                  lr=args.learning_rate,
+                  n_epoch=args.n_epochs,
+                  batch_size=args.batch_size,
+                  device_preference=args.device,
+                  encoder_dims=args.encoder_dims,
+                  kernel_size=args.kernel_size,
+                  early_stop_threshold=args.early_stop_threshold)
+    print("Done training model")
+    
+    # Adaptive Clusteringモデルだけを保存（RandomForest追加前）
+    clustering_model_path = results_path + 'adaptive_clustering_model.pkl'
+    if not os.path.exists(clustering_model_path):
+        print("Saving Adaptive Clustering model (clustering only)...")
+        save_clustering_model(model, clustering_model_path)
+        with open(clustering_model_path + ".categories", "w") as f:
+            json.dump(categories, f)
+            print(f"Categories saved: {clustering_model_path}.categories")
+        print(f"Done saving Adaptive Clustering model: {clustering_model_path}")
+    else:
+        print(f"Model already exists: {clustering_model_path}")
+    
+    if not os.path.exists(extended_dataset_path):
+        print("Creating extended dataset...")
+        rf_features, cols = extend_dataset(model, df, cats, label_tag='Label')
+        print("Done creating extended dataset")
+    else:
+        print(f"Extended dataset already exists: {extended_dataset_path}")
+    
+    now = datetime.now().strftime("%Y%m%d_%H%M%S")
+    with open(results_path + f'{now}_training_log.txt', 'w') as f:
+        f.write(f"Training log: {now}\n")
+        f.write(f"Learning rate: {args.learning_rate}\n")
+        f.write(f"Number of epochs: {args.n_epochs}\n")
+        f.write(f"Batch size: {args.batch_size if args.batch_size else 'auto'}\n")
+        f.write(f"Device: {args.device}\n")
+        f.write(f"Early stop threshold: {args.early_stop_threshold}\n")
+        f.write(f"Encoder dims: {args.encoder_dims if args.encoder_dims else [500, 200, 50]}\n")
+        f.write(f"Kernel size: {args.kernel_size}\n")
 
-# 前処理を実行
-print("Preprocessing dataset...")
-df = preprocess_cicids2017(df)
-print("Preprocessing completed")
 
-# データ分割
-print("Splitting dataset...")
-train_df, test_df = split_dataset(df, train_test_split=0.7, random_seed=42)
-print(f"Train samples: {len(train_df)}, Test samples: {len(test_df)}")
-print("Done loading dataset")
-
-
-# In[16]:
-
-
-df.head()
-
-
-# ### Preparing the data
-# 
-# We prepare the features to be in the correct format for our Adaptive Clustering network and the Random Forest Classifier.
-# 
-# The labels are separated from the training features and the order of the categories are kept track of in order to use them in the same order when evaluating the model on the testing set.
-
-# In[17]:
-
-
-# if os.path.exists(model_path + ".categories"):
-#     print(separator)
-#     print("Loading categories...")
-#     with open(model_path + ".categories", "r") as f:
-#         categories = json.load(f)
-#         print(f"categories loaded: {model_path}.categories")
-#     print("Done loading categories")
-# else:
-categories = sorted(list(set(train_df['Label'].values)))
-
-train_df_ = train_df.drop(['Label'], axis=1)
-
-# numpy配列として保持（Tensor変換はDataset内で行う）
-X = train_df_.values.astype(np.float32)
-
-# ラベルのインデックス変換をベクトル化（高速化）
-label_to_idx = {label: idx for idx, label in enumerate(categories)}
-y = train_df['Label'].map(label_to_idx).values.astype(np.int64)
-
-cats = df['Label'].copy()
-y_ = df['Label'].values
-df.drop(['Label'], axis=1, inplace=True)
-
-
-# ## Learning
-
-# ### Training the model
-# 
-# We train our model until we achieve an acceptable loss and export an extended dataset with the cluster centers obtained from the Adaptive Clustering network. This would allow us to not have to retrain our network for every single execution.
-
-# In[18]:
-
-
-# if not os.path.exists(model_path):
-print("Training model...")
-model = train(X, y)
-print("Done training model")
-
-# Adaptive Clusteringモデルだけを保存（RandomForest追加前）
-clustering_model_path = results_path + 'adaptive_clustering_model.pkl'
-if not os.path.exists(clustering_model_path):
-    print("Saving Adaptive Clustering model (clustering only)...")
-    save_clustering_model(model, clustering_model_path)
-    with open(clustering_model_path + ".categories", "w") as f:
-        json.dump(categories, f)
-        print(f"Categories saved: {clustering_model_path}.categories")
-    print(f"Done saving Adaptive Clustering model: {clustering_model_path}")
-
-if not os.path.exists(extended_dataset_path):
-    rf_features, cols = extend_dataset(model, df, cats, label_tag='Label')
-
-    del df
-    del train_df
-    del test_df
-
-exit()
+if __name__ == '__main__':
+    main()
+else:
+    # スクリプトとして直接実行された場合の互換性のため
+    # 既存のコードを保持（Jupyter notebook形式の互換性）
+    pass
 
 # As we can see here, thanks to our early stopping mechanism, we train our Adaptive Clustering model for only 17 iterations and still obtain a perfect classification accuracy and F-score of __100%__ as shown in the [performance metrics section](#Performance-metrics).
 
 # In[ ]:
 
-
+exit()
 if not os.path.exists(extended_dataset_path):
     print("Saving new dataset...")
     new_df = pd.DataFrame(data=rf_features, columns=cols)

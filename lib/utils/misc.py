@@ -8,6 +8,7 @@ from typing import List, Tuple, Any
 import os
 import sys
 from datetime import datetime
+from tqdm import tqdm
 
 root_path = os.path.dirname(os.path.realpath(__file__)) + '/../../logs'
 sys.path.append(root_path)
@@ -105,7 +106,13 @@ def extend_dataset(model: Any, df: pd.DataFrame, cats: Any, label_tag: str,
         ]
     
     with torch.no_grad():
-        for batch_start in range(0, n_samples, batch_size):
+        # バッチ数の計算
+        n_batches = (n_samples + batch_size - 1) // batch_size
+        
+        for batch_start in tqdm(range(0, n_samples, batch_size), 
+                                desc="Processing batches", 
+                                total=n_batches,
+                                unit="batch"):
             batch_end = min(batch_start + batch_size, n_samples)
             batch_data = data_array[batch_start:batch_end]
             
@@ -134,10 +141,6 @@ def extend_dataset(model: Any, df: pd.DataFrame, cats: Any, label_tag: str,
                 rf_features_tmp.append(attack_type)
                 
                 rf_features.append(rf_features_tmp)
-            
-            # 進捗表示
-            if (batch_start // batch_size + 1) % 10 == 0 or batch_end == n_samples:
-                print(f"  Processed {batch_end}/{n_samples} samples ({100*batch_end/n_samples:.1f}%)")
     
     print(f"Done creating extended dataset")
 
